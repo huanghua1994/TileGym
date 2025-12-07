@@ -21,6 +21,8 @@ class Test_Softmax(common.PyTestCase):
         (256, 1024 * 32, torch.float32),
         (256, 256, torch.float16),
         (256, 2048, torch.float16),
+        (256, 9, torch.float16),
+        (256, 1009, torch.float16),
     ])
     @pytest.mark.parametrize("backend", _backends)
     @pytest.mark.parametrize(
