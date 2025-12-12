@@ -54,6 +54,7 @@ def softmax_kernel(
         # Store result using index-based access
         ct.scatter(output, (row_idx, offsets), softmax_output, check_bounds=True)
 
+
 # TMA version with static persistent scheduling
 @ct.kernel(occupancy=2)
 def softmax_kernel_tma(
@@ -90,7 +91,6 @@ def softmax_kernel_tma(
         # Convert back to original dtype and store
         softmax_output = ct.astype(softmax_output, input.dtype)
         ct.store(output, index=(row_idx, 0), tile=softmax_output)
-
 
 
 # Launch patterns for the kernels:
@@ -186,7 +186,7 @@ class Softmax(torch.autograd.Function):
         ctx,
         x,
         use_tma=False,
-        ):
+    ):
         n_rows, n_cols = x.shape
 
         # Create output tensor
@@ -203,6 +203,7 @@ class Softmax(torch.autograd.Function):
             TILE_SIZE = next_power_of_2(n_cols)
             launch_softmax_kernel(x, y, TILE_SIZE=TILE_SIZE)
         return y
+
 
 @register_impl("softmax", backend="cutile")
 def softmax(

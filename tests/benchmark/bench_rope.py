@@ -46,19 +46,14 @@ def apply_rope_torch(
 
     return q_embed, k_embed
 
+
 register_impl("apply_rope_base", "torch")(apply_rope_torch)
 
 
 def create_rotary_embeddings(seq_len, head_dim, dtype, device, base=10000.0):
     """Create cos and sin tensors for rotary embeddings."""
     # Create frequency tensor
-    freqs = 1.0 / (
-        base
-        ** (
-            torch.arange(0, head_dim, 2, dtype=torch.float32, device=device)
-            / head_dim
-        )
-    )
+    freqs = 1.0 / (base ** (torch.arange(0, head_dim, 2, dtype=torch.float32, device=device) / head_dim))
 
     # Create position tensor
     t = torch.arange(seq_len, device=device, dtype=torch.float32)
@@ -79,9 +74,7 @@ def create_rotary_embeddings(seq_len, head_dim, dtype, device, base=10000.0):
 
 # Available backends with their display names and plot styles
 ALL_BACKENDS = [
-    ("cutile", "CuTile", ("blue", "-"))
-    if is_backend_available("cutile")
-    else None,
+    ("cutile", "CuTile", ("blue", "-")) if is_backend_available("cutile") else None,
     ("torch", "PyTorch", ("green", "-")),
 ]
 
@@ -154,9 +147,7 @@ def bench_rope(
     )
 
     # Create position ids
-    pos_ids = torch.arange(SEQ_LEN, device=device, dtype=torch.long).unsqueeze(
-        0
-    )
+    pos_ids = torch.arange(SEQ_LEN, device=device, dtype=torch.long).unsqueeze(0)
     pos_ids = pos_ids.expand(BSZ, -1)
 
     # Create rotary embeddings

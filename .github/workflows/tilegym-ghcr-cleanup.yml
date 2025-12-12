@@ -1,0 +1,40 @@
+name: tilegym-ghcr-cleanup
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:  # Allow manual trigger
+
+permissions:
+  contents: read
+  packages: write
+  pull-requests: read
+
+env:
+  IMAGE_NAME_PR: tilegym-pr
+
+jobs:
+  cleanup:
+    name: Delete Images for Closed PRs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Cleanup stale images
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PACKAGE_NAME: ${{ env.IMAGE_NAME_PR }}
+          UNTRACKED_DAYS_THRESHOLD: 7
+        run: python3 .github/scripts/cleanup_stale_images.py

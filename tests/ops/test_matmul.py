@@ -9,6 +9,8 @@ import tilegym
 
 from .. import common
 from ..common import markif
+
+
 class Test_Matmul(common.PyTestCase):
     @staticmethod
     def reference(a, b, trans_a=False, trans_b=False):
@@ -57,16 +59,26 @@ class Test_Matmul(common.PyTestCase):
         assert alignment_b == offset_b * b.element_size()
         return a, b
 
-    _backends = ["cutile"]  
-    @pytest.mark.parametrize("m, n, k, offset_a, offset_b, dtype",
-        [(1024, 1024, 1024, 0, 0, torch.bfloat16),
-         (1024, 1024, 1023, 0, 0, torch.bfloat16),
-         (16384, 16384, 16384, 0, 0, torch.bfloat16),
-         (8, 8, 8, 0, 0, torch.bfloat16),
-         (3072, 6144, 2720, 0, 0, torch.bfloat16),
-        ], ids=lambda x: str(x) if isinstance(x, list) else f"{x.__module__}.{x.__name__}" if hasattr(x, '__name__') else str(x)
+    _backends = ["cutile"]
+
+    @pytest.mark.parametrize(
+        "m, n, k, offset_a, offset_b, dtype",
+        [
+            (1024, 1024, 1024, 0, 0, torch.bfloat16),
+            (1024, 1024, 1023, 0, 0, torch.bfloat16),
+            (16384, 16384, 16384, 0, 0, torch.bfloat16),
+            (8, 8, 8, 0, 0, torch.bfloat16),
+            (3072, 6144, 2720, 0, 0, torch.bfloat16),
+        ],
+        ids=lambda x: (
+            str(x) if isinstance(x, list) else f"{x.__module__}.{x.__name__}" if hasattr(x, '__name__') else str(x)
+        ),
     )
-    @pytest.mark.parametrize("static_persistent", [True, False], ids=["static_persistent=True", "static_persistent=False"])
+    @pytest.mark.parametrize(
+        "static_persistent",
+        [True, False],
+        ids=["static_persistent=True", "static_persistent=False"],
+    )
     @pytest.mark.parametrize("use_tma", [True, False], ids=["use_tma=True", "use_tma=False"])
     @pytest.mark.parametrize("backend", _backends)
     def test_op(
@@ -90,9 +102,7 @@ class Test_Matmul(common.PyTestCase):
         if arch in ["sm120", "sm121"] and n >= 6144:
             pytest.skip("Skip due to global memory OOM")
         if k == 1023:
-            pytest.xfail(
-                "Skip matmul due to result mismatch when cannot divide BLOCK"
-            )
+            pytest.xfail("Skip matmul due to result mismatch when cannot divide BLOCK")
         self.setUp()
         a, b = self.prepare_data(m, n, k, False, False, offset_a, offset_b, dtype)
         self.assertCorrectness(

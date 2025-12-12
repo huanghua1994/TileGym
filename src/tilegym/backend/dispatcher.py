@@ -22,6 +22,7 @@ logger = get_logger(__name__)
 # Global registry with structure: {function_name: {backend_name: implementation}}
 _REGISTRY: Dict[str, Dict[str, Callable]] = {}
 
+
 def register_impl(name: str, backend: str):
     """
     Register a backend-specific implementation for a function
@@ -33,19 +34,21 @@ def register_impl(name: str, backend: str):
     Returns:
         Decorator function
     """
+
     def decorator(func):
         if name not in _REGISTRY:
             _REGISTRY[name] = {}
 
         _REGISTRY[name][backend] = func
-        logger.debug(
-            f"[Backend Register] Registered '{backend}' implementation for '{name}'"
-        )
+        logger.debug(f"[Backend Register] Registered '{backend}' implementation for '{name}'")
         return func
 
     return decorator
 
+
 _LOGGED_WARNINGS = set()
+
+
 def dispatch(name: str, fallback_backend: str = "pytorch"):
     """
     Create a dispatcher that selects the correct implementation based on current backend
@@ -57,6 +60,7 @@ def dispatch(name: str, fallback_backend: str = "pytorch"):
     Returns:
         Decorator function
     """
+
     def decorator(default_impl):
         @functools.wraps(default_impl)
         def wrapper(*args, **kwargs):
@@ -68,15 +72,11 @@ def dispatch(name: str, fallback_backend: str = "pytorch"):
             else:
                 current_backend = get_current_backend()
 
-            logger.debug(
-                f"[Backend Dispatch] Function: '{name}', Current backend: '{current_backend}'"
-            )
+            logger.debug(f"[Backend Dispatch] Function: '{name}', Current backend: '{current_backend}'")
 
             # Try implementation from current backend
             if name in _REGISTRY and current_backend in _REGISTRY[name]:
-                logger.debug(
-                    f"[Backend Dispatch] Using '{current_backend}' implementation for '{name}'"
-                )
+                logger.debug(f"[Backend Dispatch] Using '{current_backend}' implementation for '{name}'")
                 return _REGISTRY[name][current_backend](*args, **kwargs)
 
             # Try implementation from fallback backend
@@ -88,18 +88,12 @@ def dispatch(name: str, fallback_backend: str = "pytorch"):
                         f"falling back to '{fallback_backend}' backend"
                     )
                     _LOGGED_WARNINGS.add(warning_key)
-                logger.debug(
-                    f"[Backend Dispatch] Using fallback '{fallback_backend}' implementation for '{name}'"
-                )
+                logger.debug(f"[Backend Dispatch] Using fallback '{fallback_backend}' implementation for '{name}'")
                 return _REGISTRY[name][fallback_backend](*args, **kwargs)
 
             # Use default implementation
-            logger.warning(
-                f"No backend implementation found for '{name}', using default implementation"
-            )
-            logger.debug(
-                f"[Backend Dispatch] Using default implementation for '{name}'"
-            )
+            logger.warning(f"No backend implementation found for '{name}', using default implementation")
+            logger.debug(f"[Backend Dispatch] Using default implementation for '{name}'")
             return default_impl(*args, **kwargs)
 
         # Register default implementation
@@ -111,6 +105,7 @@ def dispatch(name: str, fallback_backend: str = "pytorch"):
         return wrapper
 
     return decorator
+
 
 def get_available_backends_for_op(name: str) -> list:
     """
@@ -127,6 +122,7 @@ def get_available_backends_for_op(name: str) -> list:
 
     return list(_REGISTRY[name].keys())
 
+
 def get_registry_info() -> Dict[str, Dict[str, str]]:
     """
     Get information about all registered implementations
@@ -137,10 +133,15 @@ def get_registry_info() -> Dict[str, Dict[str, str]]:
     result = {}
     for func_name, backends in _REGISTRY.items():
         result[func_name] = {
-            backend: impl.__module__ + "." + impl.__name__ if hasattr(impl, '__module__') and hasattr(impl, '__name__') else str(impl)
+            backend: (
+                impl.__module__ + "." + impl.__name__
+                if hasattr(impl, '__module__') and hasattr(impl, '__name__')
+                else str(impl)
+            )
             for backend, impl in backends.items()
         }
     return result
+
 
 def print_registry_info():
     """
@@ -150,6 +151,10 @@ def print_registry_info():
     for func_name, backends in _REGISTRY.items():
         print(f"\n📋 Function: {func_name}")
         for backend, impl in backends.items():
-            impl_info = f"{impl.__module__}.{impl.__name__}" if hasattr(impl, '__module__') and hasattr(impl, '__name__') else str(impl)
+            impl_info = (
+                f"{impl.__module__}.{impl.__name__}"
+                if hasattr(impl, '__module__') and hasattr(impl, '__name__')
+                else str(impl)
+            )
             print(f"  └─ {backend}: {impl_info}")
     print("=" * 40)

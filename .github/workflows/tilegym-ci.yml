@@ -1,0 +1,365 @@
+name: tilegym-ci
+
+on:
+  push:
+    branches:
+      - "pull-request/[0-9]+"
+  schedule:
+    # Run nightly at 12 PM UTC
+    - cron: '0 12 * * *'
+  workflow_dispatch:  # Allow manual trigger
+
+permissions:
+  contents: read
+  packages: write
+  pull-requests: read
+  checks: write
+
+env:
+  # PR images go to a temp repo, main/nightly go to main repo
+  IMAGE_NAME_PR: tilegym-pr
+  IMAGE_NAME_MAIN: tilegym
+
+jobs:
+  config:
+    name: parse-ci-config
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.parse.outputs.build }}
+      run_ops: ${{ steps.parse.outputs.run_ops }}
+      run_benchmark: ${{ steps.parse.outputs.run_benchmark }}
+      image_tag: ${{ steps.parse.outputs.image_tag }}
+      image_name: ${{ steps.parse.outputs.image_name }}
+      is_pr: ${{ steps.context.outputs.is_pr }}
+    steps:
+      - name: Determine context
+        id: context
+        run: |
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]] || [[ "${{ github.event_name }}" == "schedule" ]]; then
+            echo "is_pr=false" >> $GITHUB_OUTPUT
+            echo "image_name=${{ env.IMAGE_NAME_MAIN }}" >> $GITHUB_OUTPUT
+            echo "Running in main/nightly context"
+          else
+            echo "is_pr=true" >> $GITHUB_OUTPUT
+            echo "image_name=${{ env.IMAGE_NAME_PR }}" >> $GITHUB_OUTPUT
+            echo "Running in PR context"
+          fi
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get PR info
+        id: pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            let prBody = '';
+            let prNumber = '';
+            
+            const branchName = context.ref.replace('refs/heads/', '');
+            core.info(`Looking for PR for branch: ${branchName}`);
+            
+            // Try method 1: Extract PR number from branch name
+            const branchMatch = branchName.match(/^pull-request\/(\d+)/);
+            if (branchMatch) {
+              prNumber = branchMatch[1];
+              core.info(`Extracted PR #${prNumber} from branch name`);
+              
+              // Fetch PR body by number
+              try {
+                const { data: pr } = await github.rest.pulls.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: parseInt(prNumber),
+                });
+                prBody = pr.body || '';
+                core.info(`Fetched PR body (${prBody.length} characters)`);
+              } catch (error) {
+                core.warning(`Failed to fetch PR #${prNumber}: ${error.message}`);
+              }
+            } else {
+              // Try method 2: Search by branch name
+              try {
+                const { data: prs } = await github.rest.pulls.list({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  state: 'open',
+                  head: `${context.repo.owner}:${branchName}`,
+                });
+                
+                if (prs.length > 0) {
+                  prBody = prs[0].body || '';
+                  prNumber = prs[0].number.toString();
+                  core.info(`Found PR #${prNumber} via API search`);
+                  core.info(`PR body length: ${prBody.length} characters`);
+                } else {
+                  core.info(`No open PR found for branch ${branchName}`);
+                }
+              } catch (error) {
+                core.warning(`Error searching for PR: ${error.message}`);
+              }
+            }
+            
+            return { prBody, prNumber };
+
+      - name: Parse config and set image tag
+        id: parse
+        env:
+          PR_BODY: ${{ fromJSON(steps.pr.outputs.result).prBody }}
+          PR_NUMBER: ${{ fromJSON(steps.pr.outputs.result).prNumber }}
+          IS_PR: ${{ steps.context.outputs.is_pr }}
+        run: |
+          # Parse CI config from PR body (only for PRs)
+          if [[ "$IS_PR" == "true" ]]; then
+            pip install pyyaml --quiet
+            python3 .github/scripts/parse_pr_config.py
+            
+            # Set PR-specific image tag
+            if [ -n "$PR_NUMBER" ]; then
+              echo "image_tag=pr-${PR_NUMBER}" >> $GITHUB_OUTPUT
+              echo "Using image tag: pr-${PR_NUMBER}"
+            else
+              echo "image_tag=latest" >> $GITHUB_OUTPUT
+              echo "Using image tag: latest (PR without number)"
+            fi
+          else
+            # Main/nightly: always build and run all tests
+            echo "build=true" >> $GITHUB_OUTPUT
+            echo "run_ops=true" >> $GITHUB_OUTPUT
+            echo "run_benchmark=true" >> $GITHUB_OUTPUT
+            echo "image_tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+            echo "Main/nightly build: running all tests (latest tag added after tests pass)"
+          fi
+          
+          # Pass through image name from context
+          echo "image_name=${{ steps.context.outputs.image_name }}" >> $GITHUB_OUTPUT
+
+  build:
+    name: build-tilegym-image
+    needs: config
+    if: needs.config.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      skipped: ${{ steps.check-existing.outputs.skipped || 'false' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check if image already exists (for nightly)
+        id: check-existing
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IS_PR: ${{ needs.config.outputs.is_pr }}
+        run: |
+          OWNER_LOWER=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          export REGISTRY_IMAGE="ghcr.io/${OWNER_LOWER}/${{ needs.config.outputs.image_name }}"
+          export IMAGE_TAG="${{ github.sha }}"
+          python3 .github/scripts/check_image_exists.py
+
+      - name: Set image variables
+        id: vars
+        if: steps.check-existing.outputs.skipped != 'true'
+        run: |
+          OWNER_LOWER=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          REGISTRY_IMAGE="ghcr.io/${OWNER_LOWER}/${{ needs.config.outputs.image_name }}"
+          
+          echo "owner_lower=${OWNER_LOWER}" >> $GITHUB_OUTPUT
+          echo "registry_image=${REGISTRY_IMAGE}" >> $GITHUB_OUTPUT
+
+      - name: Free up disk space
+        if: steps.check-existing.outputs.skipped != 'true'
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          docker system prune -af
+          df -h
+
+      - name: Set up Docker Buildx
+        if: steps.check-existing.outputs.skipped != 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        if: steps.check-existing.outputs.skipped != 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate tags
+        if: steps.check-existing.outputs.skipped != 'true'
+        id: tags
+        run: |
+          TAGS="${{ steps.vars.outputs.registry_image }}:${{ needs.config.outputs.image_tag }}"
+          TAGS="${TAGS},${{ steps.vars.outputs.registry_image }}:${{ github.sha }}"
+          
+          # Add datetime tag for nightly builds
+          if [[ "${{ needs.config.outputs.is_pr }}" == "false" ]]; then
+            DATETIME=$(date -u +%Y%m%d-%H%M%S)
+            TAGS="${TAGS},${{ steps.vars.outputs.registry_image }}:nightly-${DATETIME}"
+          fi
+          
+          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+
+      - name: Build and push Docker image to GHCR
+        if: steps.check-existing.outputs.skipped != 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./modeling/transformers/Dockerfile
+          tags: ${{ steps.tags.outputs.tags }}
+          push: true
+          cache-from: |
+            type=gha
+            type=registry,ref=${{ steps.vars.outputs.registry_image }}:latest
+            type=registry,ref=${{ steps.vars.outputs.registry_image }}:${{ needs.config.outputs.image_tag }}
+            type=registry,ref=ghcr.io/${{ steps.vars.outputs.owner_lower }}/tilegym:latest
+          cache-to: type=gha,mode=max
+
+  test-ops:
+    name: test-ops
+    needs: [config, build]
+    if: |
+      always() && 
+      needs.config.outputs.run_ops == 'true' &&
+      needs.build.outputs.skipped != 'true' &&
+      (needs.build.result == 'success' || needs.build.result == 'skipped')
+    runs-on: linux-amd64-gpu-rtxpro6000-latest-1
+    steps:
+      - name: Create test results directory
+        run: mkdir -p ${{ github.workspace }}/test-results
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull and run ops tests
+        run: |
+          OWNER_LOWER=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          IMAGE="ghcr.io/${OWNER_LOWER}/${{ needs.config.outputs.image_name }}:${{ needs.config.outputs.image_tag }}"
+          
+          docker pull ${IMAGE}
+          docker run --rm \
+            --gpus all \
+            -v ${{ github.workspace }}/test-results:/test-results \
+            -w /workspace/tilegym \
+            ${IMAGE} \
+            bash -c "pip install --no-cache-dir pytest-xdist pytest-html && \
+              pytest -s tests/ops -v -k test_op \
+                -n auto \
+                --junitxml=/test-results/ops-results.xml \
+                --html=/test-results/ops-report.html \
+                --self-contained-html"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ops-test-results
+          path: test-results/ops-*
+          retention-days: 30
+
+      - name: Publish test results
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        if: always()
+        with:
+          files: test-results/ops-results.xml
+          check_name: Ops Test Results
+
+  test-benchmark:
+    name: test-benchmark
+    needs: [config, build]
+    if: |
+      always() && 
+      needs.config.outputs.run_benchmark == 'true' &&
+      needs.build.outputs.skipped != 'true' &&
+      (needs.build.result == 'success' || needs.build.result == 'skipped')
+    runs-on: linux-amd64-gpu-rtxpro6000-latest-1
+    steps:
+      - name: Checkout code (sparse - only need formatting script)
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/scripts/format_benchmark_summary.py
+          sparse-checkout-cone-mode: false
+
+      - name: Create test results directory
+        run: mkdir -p ${{ github.workspace }}/test-results
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull and run benchmarks
+        run: |
+          OWNER_LOWER=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          IMAGE="ghcr.io/${OWNER_LOWER}/${{ needs.config.outputs.image_name }}:${{ needs.config.outputs.image_tag }}"
+          
+          docker pull ${IMAGE}
+          docker run --rm \
+            --gpus all \
+            -v ${{ github.workspace }}/test-results:/test-results \
+            -w /workspace/tilegym/tests/benchmark \
+            ${IMAGE} \
+            ./run_all.sh /test-results
+
+      - name: Debug - List test results directory
+        if: always()
+        run: |
+          echo "Contents of test-results directory:"
+          ls -lah ${{ github.workspace }}/test-results/ || echo "Directory does not exist"
+          echo ""
+          echo "Files matching *_results.txt:"
+          ls -lh ${{ github.workspace }}/test-results/*_results.txt 2>/dev/null || echo "No matching files found"
+
+      - name: Format benchmark summary
+        if: always()
+        run: python3 .github/scripts/format_benchmark_summary.py test-results
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: test-results/*_results.txt
+          retention-days: 30
+
+  promote-to-latest:
+    name: promote-to-latest
+    needs: [config, build, test-ops, test-benchmark]
+    if: |
+      always() &&
+      needs.config.outputs.is_pr == 'false' &&
+      needs.build.result == 'success' &&
+      needs.test-ops.result == 'success' &&
+      needs.test-benchmark.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Promote SHA to latest and mark as verified
+        run: |
+          OWNER_LOWER=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          IMAGE="ghcr.io/${OWNER_LOWER}/${{ needs.config.outputs.image_name }}"
+          SHA="${{ github.sha }}"
+          
+          echo "Promoting ${IMAGE}:${SHA} to latest and adding verified tags (tests passed)"
+          docker buildx imagetools create \
+            -t ${IMAGE}:latest \
+            -t ${IMAGE}:${SHA}-verified \
+            ${IMAGE}:${SHA}

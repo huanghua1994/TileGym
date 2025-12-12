@@ -28,14 +28,12 @@ def pytest_addoption(parser):
             default=f"sm{torch.cuda.get_device_capability('cuda')[0]}{torch.cuda.get_device_capability('cuda')[1]}",
             help="GPU Backend Type",
         )
-        parser.addoption(
-            "--quick-run", action="store_true", default=False, help="Quick Run"
-        )
+        parser.addoption("--quick-run", action="store_true", default=False, help="Quick Run")
         parser.addoption(
             "--print-record",
             action="store_true",
             default=False,
-            help="Print record_property content in tests"
+            help="Print record_property content in tests",
         )
         parser.addoption(
             "--run-full",
@@ -47,16 +45,20 @@ def pytest_addoption(parser):
         # if it is added by parent directory, skip it
         pass
 
+
 def pytest_ignore_collect(collection_path: pathlib.Path, config):
     return "transformers" in str(collection_path)
+
 
 @pytest.fixture
 def arch(request):
     return request.config.getoption("--arch")
 
+
 @pytest.fixture
 def quick_run(request):
     return request.config.getoption("--quick-run")
+
 
 @pytest.fixture
 def framework(request):

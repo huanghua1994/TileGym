@@ -6,21 +6,17 @@
 Backend management for TileGym project
 """
 
-from .selector import (
-    get_available_backends,
-    get_current_backend,
-    set_backend,
-    is_backend_available,
-    assert_backend_available,
-)
+from .dispatcher import dispatch
+from .dispatcher import get_available_backends_for_op
+from .dispatcher import get_registry_info
+from .dispatcher import print_registry_info
+from .dispatcher import register_impl
+from .selector import assert_backend_available
+from .selector import get_available_backends
+from .selector import get_current_backend
+from .selector import is_backend_available
+from .selector import set_backend
 
-from .dispatcher import (
-    dispatch,
-    register_impl,
-    get_available_backends_for_op,
-    get_registry_info,
-    print_registry_info
-)
 
 def make_missing_backend_handler(package_name, available_items):
     """
@@ -41,9 +37,7 @@ def make_missing_backend_handler(package_name, available_items):
                 f"'{name}' requires cutile backend. Please install cutile using the following command:\n"
                 "pip install --pre --extra-index-url https://urm.nvidia.com/artifactory/api/pypi/nv-shared-pypi-local/simple cuda-tile"
             )
-        raise AttributeError(
-            f"module '{package_name}' has no attribute '{name}'"
-        )
+        raise AttributeError(f"module '{package_name}' has no attribute '{name}'")
 
     return __getattr__
 

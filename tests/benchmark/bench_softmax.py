@@ -19,14 +19,13 @@ def reference_softmax(
     """Reference implementation of softmax using PyTorch"""
     return torch.nn.functional.softmax(x, dim=-1)
 
+
 register_impl("softmax", "torch")(reference_softmax)
 
 
 # Available backends with their display names and plot styles
 ALL_BACKENDS = [
-    ("cutile", "CuTile", ("blue", "-"))
-    if is_backend_available("cutile")
-    else None,
+    ("cutile", "CuTile", ("blue", "-")) if is_backend_available("cutile") else None,
     ("torch", "PyTorch", ("green", "-")),
 ]
 
@@ -58,11 +57,7 @@ def create_benchmark_config(M, use_tma=True):
 
 
 @triton.testing.perf_report(
-    [
-        create_benchmark_config(M, use_tma)
-        for M in [4096]  # Matrix height
-        for use_tma in [True, False]
-    ]
+    [create_benchmark_config(M, use_tma) for M in [4096] for use_tma in [True, False]]  # Matrix height
 )
 def bench_softmax(M, N, backend, use_tma, dtype=torch.float32, device=DEVICE):
     # Create data

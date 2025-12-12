@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 class Config:
     """One kernel variant: meta-params in kwargs (e.g., TILE)."""
+
     def __init__(self, *, num_ctas=None, occupancy=None, opt_level=3, **kwargs):
         self.kwargs = dict(kwargs)
         self.num_ctas = num_ctas
@@ -281,7 +282,10 @@ class Autotuner:
 
                 grid = grid_fn(trial_named_args, cfg)
                 updated_kernel = ct.kernel(
-                    kernel._pyfunc, num_ctas=cfg.num_ctas, occupancy=cfg.occupancy, opt_level=cfg.opt_level
+                    kernel._pyfunc,
+                    num_ctas=cfg.num_ctas,
+                    occupancy=cfg.occupancy,
+                    opt_level=cfg.opt_level,
                 )
 
                 def run_once(args):

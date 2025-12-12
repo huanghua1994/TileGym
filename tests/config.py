@@ -8,7 +8,6 @@ import sys
 
 
 class FromEnvironment(argparse.Action):
-
     def __init__(
         self,
         envvar,
@@ -27,15 +26,13 @@ class FromEnvironment(argparse.Action):
             if nargs == 1:
                 if default is not None and default not in kwargs['choices']:
                     raise RuntimeError(
-                        f'argument {envvar}: invalid choice: {default} '
-                        f'(choose from {kwargs["choices"]})'
+                        f'argument {envvar}: invalid choice: {default} ' f'(choose from {kwargs["choices"]})'
                     )
             elif nargs in ['+', '*']:
                 for item in default:
                     if item not in kwargs['choices']:
                         raise RuntimeError(
-                            f'argument {envvar}: invalid choice: {item} '
-                            f'(choose from {kwargs["choices"]})'
+                            f'argument {envvar}: invalid choice: {item} ' f'(choose from {kwargs["choices"]})'
                         )
 
         super().__init__(required=required, default=default, **kwargs)
@@ -45,7 +42,6 @@ class FromEnvironment(argparse.Action):
 
 
 class CacheMeta(type):
-
     def __getattr__(self, name):
         return getattr(self.args, name)
 
@@ -70,10 +66,7 @@ class Config(metaclass=CacheMeta):
             action=FromEnvironment,
             default=0,
             type=int,
-            help=(
-                'set SEED to use manually provided random seed, if unset uses '
-                'a random time-based seed'
-            ),
+            help=('set SEED to use manually provided random seed, if unset uses ' 'a random time-based seed'),
         )
         parser.add_argument(
             '--quiet',
@@ -105,10 +98,7 @@ class Config(metaclass=CacheMeta):
             default=None,
             choices=['txt', 'html', 'csv', 'json', 'md'],
             type=str,
-            help=(
-                'set DUMP to store results of performance tests in a '
-                'specified format'
-            ),
+            help=('set DUMP to store results of performance tests in a ' 'specified format'),
         )
         parser.add_argument(
             '--dump-dir',
@@ -117,10 +107,7 @@ class Config(metaclass=CacheMeta):
             required=False,
             default='/tmp/',
             type=str,
-            help=(
-                'set DUMP_DIR to specify directory to store results of '
-                'performance tests'
-            ),
+            help=('set DUMP_DIR to specify directory to store results of ' 'performance tests'),
         )
         parser.add_argument(
             '--load',
@@ -130,10 +117,7 @@ class Config(metaclass=CacheMeta):
             default=None,
             choices=['txt', 'html', 'csv', 'json', 'md'],
             type=str,
-            help=(
-                'set LOAD to load results of performance tests in a '
-                'specified format'
-            ),
+            help=('set LOAD to load results of performance tests in a ' 'specified format'),
         )
         parser.add_argument(
             '--load-dir',
@@ -142,10 +126,7 @@ class Config(metaclass=CacheMeta):
             required=False,
             default='/tmp/',
             type=str,
-            help=(
-                'set LOAD_DIR to specify directory to load results of '
-                'performance tests'
-            ),
+            help=('set LOAD_DIR to specify directory to load results of ' 'performance tests'),
         )
         parser.add_argument(
             '--load-names',
@@ -154,9 +135,7 @@ class Config(metaclass=CacheMeta):
             nargs='*',
             default=['cutile'],
             type=str,
-            help=(
-                'set LOAD_NAMES to select which test series should be loaded'
-            ),
+            help=('set LOAD_NAMES to select which test series should be loaded'),
         )
         parser.add_argument(
             '--warmup',
@@ -164,10 +143,7 @@ class Config(metaclass=CacheMeta):
             action=FromEnvironment,
             default=100,
             type=float,
-            help=(
-                'set WARMUP to specify the warmup duration for performance '
-                'tests [ms]'
-            ),
+            help=('set WARMUP to specify the warmup duration for performance ' 'tests [ms]'),
         )
         parser.add_argument(
             '--rep',
@@ -175,10 +151,7 @@ class Config(metaclass=CacheMeta):
             action=FromEnvironment,
             default=50,
             type=float,
-            help=(
-                'set REP to specify the duration for measured iterations of '
-                'performance tests [ms]'
-            ),
+            help=('set REP to specify the duration for measured iterations of ' 'performance tests [ms]'),
         )
         parser.add_argument(
             '--min-rep',
@@ -186,10 +159,7 @@ class Config(metaclass=CacheMeta):
             action=FromEnvironment,
             default=2,
             type=int,
-            help=(
-                'set MIN_REP to specify the minimum number of measured '
-                'iterations for performance tests'
-            ),
+            help=('set MIN_REP to specify the minimum number of measured ' 'iterations for performance tests'),
         )
         parser.add_argument(
             '--initial-rep',
@@ -245,10 +215,7 @@ class Config(metaclass=CacheMeta):
             required=False,
             default='dev',
             type=str,
-            help=(
-                'set CONFIG to specify the name of a set of hyperparameters '
-                'to be launched by automatic tests'
-            ),
+            help=('set CONFIG to specify the name of a set of hyperparameters ' 'to be launched by automatic tests'),
         )
         parser.add_argument(
             '--fields',
@@ -285,9 +252,7 @@ class Config(metaclass=CacheMeta):
             action=FromEnvironment,
             default=False,
             type=bool,
-            help=(
-                'set PRINT_MATCHING to always print info from assertAllClose'
-            ),
+            help=('set PRINT_MATCHING to always print info from assertAllClose'),
         )
         parser.add_argument(
             '--verbose',
@@ -311,4 +276,3 @@ class Config(metaclass=CacheMeta):
         if cls.args.help:
             parser.print_help()
             sys.exit(0)
-

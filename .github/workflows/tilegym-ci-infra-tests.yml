@@ -1,0 +1,66 @@
+name: tilegym-ci-infra-tests
+
+on:
+  push:
+    branches:
+      - main
+      - "pull-request/[0-9]+"
+
+permissions:
+  contents: read
+  checks: write
+
+jobs:
+  python-formatting:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # Fetch all history for darker to compare
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      
+      - name: Install formatting tools
+        run: pip install darker black==22.12.0 isort==5.11.4
+      
+      - name: Run darker with isort
+        run: |
+          darker --check --diff \
+            --isort \
+            --line-length 120 \
+            --revision origin/main... \
+            .
+
+  utility-scripts-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: pip install pytest pytest-mock pyyaml requests
+
+      - name: Run tests
+        run: pytest .github/infra_tests/ --junit-xml=infra-test-results.xml -v
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: infra-test-results
+          path: infra-test-results.xml
+
+      - name: Publish test results
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        if: always()
+        with:
+          files: infra-test-results.xml
+          check_name: Infrastructure Test Results

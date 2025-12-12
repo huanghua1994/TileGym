@@ -16,11 +16,10 @@ from tilegym.ops import get_fused_swiglu_module
 from tilegym.ops import get_rms_norm_module
 from tilegym.ops import get_swiglu_module
 from tilegym.transformers.deepseek2.modeling_deepseek import DeepseekV2MoETileGym
-from tilegym.transformers.deepseek2.modeling_deepseek import (
-    tilegym_deepseek_v2_forward,
-)
+from tilegym.transformers.deepseek2.modeling_deepseek import tilegym_deepseek_v2_forward
 
 logger = get_logger(__name__)
+
 
 def apply_tilegym_kernel_to_llama(
     rope: bool = True,
@@ -61,6 +60,7 @@ def apply_tilegym_kernel_to_llama(
 
         ALL_ATTENTION_FUNCTIONS['sdpa'] = get_fmha_interface()
 
+
 def apply_tilegym_kernel_to_deepseek_v2(
     rope: bool = True,
     rms_norm: bool = True,
@@ -86,17 +86,13 @@ def apply_tilegym_kernel_to_deepseek_v2(
     logger.info("--------------------------------")
     logger.info("apply_tilegym_kernel_to_deepseek_v2")
     logger.info("--------------------------------")
-    from transformers.models.deepseek_v2 import (
-        modeling_deepseek_v2 as modeling_deepseek,
-    )
+    from transformers.models.deepseek_v2 import modeling_deepseek_v2 as modeling_deepseek
 
     if use_cutile:
         set_backend("cutile")
 
     if rope:
-        modeling_deepseek.apply_rotary_emb = get_apply_rope_func(
-            model='deepseek'
-        )
+        modeling_deepseek.apply_rotary_emb = get_apply_rope_func(model='deepseek')
 
     if rms_norm:
         modeling_deepseek.DeepseekV2RMSNorm = get_rms_norm_module()
@@ -109,16 +105,16 @@ def apply_tilegym_kernel_to_deepseek_v2(
 
     if attn:
         # Replace attention forward with TileGym implementation
-        modeling_deepseek.DeepseekV2Attention.forward = (
-            tilegym_deepseek_v2_forward
-        )
+        modeling_deepseek.DeepseekV2Attention.forward = tilegym_deepseek_v2_forward
     if moe:
         modeling_deepseek.DeepseekV2MoE = DeepseekV2MoETileGym
+
 
 MODEL_TYPE_TO_APPLY_TILEGYM_FN = {
     "llama": apply_tilegym_kernel_to_llama,
     "deepseek_v2": apply_tilegym_kernel_to_deepseek_v2,
 }
+
 
 def _apply_tilegym_kernel(model_type: str, **kwargs) -> None:
     """
@@ -134,15 +130,11 @@ def _apply_tilegym_kernel(model_type: str, **kwargs) -> None:
         - kwargs: keyword arguments that are passed to the corresponding apply_TileGym_kernel_to_* function.
     """
     if not model_type:
-        logger.info(
-            "Model type was not provided. No TileGym kernels will be applied."
-        )
+        logger.info("Model type was not provided. No TileGym kernels will be applied.")
         return
 
     if model_type not in MODEL_TYPE_TO_APPLY_TILEGYM_FN.keys():
-        logger.info(
-            f"There are currently no TileGym kernels supported for model type: {model_type}."
-        )
+        logger.info(f"There are currently no TileGym kernels supported for model type: {model_type}.")
         return
 
     apply_fn = MODEL_TYPE_TO_APPLY_TILEGYM_FN[model_type]
