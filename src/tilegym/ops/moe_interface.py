@@ -287,6 +287,117 @@ def fused_experts_impl(
     return out_hidden_states
 
 
+@dispatch(
+    "invoke_fused_moe_kernel_v2",
+)
+def invoke_fused_moe_kernel_v2(*args, **kwargs) -> None:
+    raise NotImplementedError(f"invoke_fused_moe_kernel is not implemented for this backend: {get_current_backend()}")
+
+def fused_experts_impl_v2(
+    hidden_states: torch.Tensor,     # Shape (num_tokens, hidden_size)
+    w1: torch.Tensor,                # Shape (num_experts, 2 * moe_intermediate_size, hidden_size)
+    w2: torch.Tensor,                # Shape (num_experts, hidden_size, moe_intermediate_size)
+    topk_weights: torch.Tensor,      # Shape (num_tokens, top_k)
+    topk_ids: torch.Tensor,          # Shape (num_tokens, top_k)
+    inplace: bool = False,
+    use_fp8_w8a8: bool = False,      # Unused yet
+    use_int8_w8a16: bool = False,    # Unused yet
+    w1_scale: Optional[torch.Tensor] = None,  # Unused yet
+    w2_scale: Optional[torch.Tensor] = None,  # Unused yet
+    a1_scale: Optional[torch.Tensor] = None,  # Unused yet
+    config: Optional[dict] = None,
+):
+    assert hidden_states.shape[1] == w1.shape[2], "Hidden size mismatch"
+    assert topk_weights.shape == topk_ids.shape, "TopK weights and ids shape mismatch"
+    assert hidden_states.is_contiguous(), "Hidden_states must be contiguous"
+    assert w1.is_contiguous(), "Expert weights1 must be contiguous"
+    assert w2.is_contiguous(), "Expert weights2 must be contiguous"
+    assert hidden_states.dtype in [
+        torch.float32,
+        torch.float16,
+        torch.bfloat16,
+    ]
+
+    num_tokens, hidden_size = hidden_states.shape
+    num_experts, _, moe_intermediate_size = w2.shape
+    top_k = topk_ids.shape[1]
+
+    TILE_M = config.get("TILE_SIZE_M", 128)
+    (sorted_token_ids, expert_ids, num_tokens_post_padded, _) = moe_align_block_size(topk_ids, TILE_M, num_experts)
+
+    num_M_tiles = expert_ids.shape[0]
+    padded_M = num_M_tiles * TILE_M
+
+    device = hidden_states.device
+    out_dtype = torch.bfloat16 if hidden_states.dtype == torch.bfloat16 else torch.float16
+    group_gemm_1_output = torch.empty(
+        (padded_M, 2 * moe_intermediate_size),
+        device=device,
+        dtype=out_dtype,
+    )
+    silu_and_mul_output = torch.empty(
+        (padded_M, moe_intermediate_size),
+        device=device,
+        dtype=out_dtype,
+    )
+    group_gemm_2_output = torch.empty(
+        (num_tokens * top_k, hidden_size),
+        device=device,
+        dtype=out_dtype,
+    )
+
+    if inplace:
+        out_hidden_states = hidden_states
+    else:
+        out_hidden_states = torch.empty_like(hidden_states, dtype=out_dtype)
+
+    gather_a = True
+    scatter_c = False
+    mul_topk_weights = False
+    invoke_fused_moe_kernel_v2(
+        hidden_states,
+        w1,
+        group_gemm_1_output,
+        topk_weights,
+        sorted_token_ids,
+        expert_ids,
+        num_tokens_post_padded,
+        mul_topk_weights,
+        top_k,
+        gather_a,
+        scatter_c,
+        config,
+    )
+
+    from tilegym.ops.ops import silu_and_mul
+    silu_and_mul(group_gemm_1_output, silu_and_mul_output)
+    if silu_and_mul_output.dtype != hidden_states.dtype:
+        silu_and_mul_output = silu_and_mul_output.to(hidden_states.dtype)
+
+    gather_a = False
+    scatter_c = True
+    mul_topk_weights = True
+    invoke_fused_moe_kernel_v2(
+        silu_and_mul_output,
+        w2,
+        group_gemm_2_output,
+        topk_weights,
+        sorted_token_ids,
+        expert_ids,
+        num_tokens_post_padded,
+        mul_topk_weights,
+        top_k,
+        gather_a,
+        scatter_c,
+        config,
+    )
+
+    group_gemm_2_output = group_gemm_2_output.view(num_tokens, top_k, hidden_size)
+    torch.sum(group_gemm_2_output, dim=1, out=out_hidden_states)
+
+    return out_hidden_states
+
+
 def fused_moe_kernel_interface(
     hidden_states: torch.Tensor,
     w1: torch.Tensor,

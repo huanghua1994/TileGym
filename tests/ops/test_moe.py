@@ -69,6 +69,8 @@ class Test_MOE(common.PyTestCase):
         [
             (16, 512, 256, 8, 2),
             (32, 1024, 512, 16, 4),
+            # This will fail, using a smaller hidden_size or moe_intermediate_size can pass
+            (128, 4096, 2048, 16, 4),
         ],
     )
     @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float8_e4m3fn])
@@ -87,6 +89,8 @@ class Test_MOE(common.PyTestCase):
         """Test correctness of MoE kernel against pure PyTorch reference implementation."""
         if not torch.cuda.is_available():
             pytest.skip("CUDA not available")
+
+        torch.manual_seed(0)
 
         if arch == "sm80" and dtype == torch.float8_e4m3fn:
             pytest.skip("Skip on sm80: don't support float8.")
@@ -215,3 +219,19 @@ class Test_MOE(common.PyTestCase):
             rtol=rtol,
             atol=atol,
         )
+
+        num_warmup = 10
+        for _ in range(num_warmup):
+            output = moe_wrapper(hidden_states, w1, w2, topk_weights, topk_ids)
+
+        num_tests = 100
+        import time
+        torch.cuda.synchronize()
+        start_time = time.time()
+        for _ in range(num_tests):
+            output = moe_wrapper(hidden_states, w1, w2, topk_weights, topk_ids)
+        torch.cuda.synchronize()
+        end_time = time.time()
+        avg_time_ms = (end_time - start_time) / num_tests * 1000
+        print(f"Average time taken: {avg_time_ms} ms")
+

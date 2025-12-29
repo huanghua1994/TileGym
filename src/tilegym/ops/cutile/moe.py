@@ -222,3 +222,143 @@ def invoke_fused_moe_kernel(
             c_stride_1,  # Original C.shape[1]
         ),
     )
+
+ConstInt = ct.Constant[int]
+ConstBool = ct.Constant[bool]
+
+@ct.kernel
+def fused_moe_kernel_v2(
+    A,   # Shape (M or padded_M, K)
+    B,   # Shape (E, N, K)
+    C,   # Shape (padded_M or M*topk, N)
+    topk_weights,               # Shape (M*topk, )
+    sorted_token_ids,           # Shape (padded_M, ), values range from 0 to M*topk (padded tokens have value M*topk)
+    expert_ids,                 # Shape (padded_M//TILE_M, )
+    num_tokens_post_padded,     # Shape (1, )
+    TILE_M: ConstInt,
+    TILE_N: ConstInt,
+    TILE_K: ConstInt,
+    GROUP_SIZE_M: ConstInt,
+    num_M_tiles: ConstInt,
+    num_N_tiles: ConstInt,
+    num_K_tiles: ConstInt,
+    topk: ConstInt,
+    gather_a: ConstBool,
+    scatter_c: ConstBool,
+    mul_topk_weights: ConstBool,
+):
+    # 2D swizzle to to promote L2 data reuse, same as the group_gemm_kernel
+    bid = ct.bid(0)
+    num_bid_in_group = GROUP_SIZE_M * num_N_tiles
+    group_id = bid // num_bid_in_group
+    first_bid_m = group_id * GROUP_SIZE_M
+    group_size_m = min(num_M_tiles - first_bid_m, GROUP_SIZE_M)
+    m_tile_idx = first_bid_m + ((bid % num_bid_in_group) % group_size_m)
+    n_tile_idx = (bid % num_bid_in_group) // group_size_m
+
+    num_tokens_post_padded_ = ct.gather(num_tokens_post_padded, 0, padding_value=0)
+
+    expert_idx = ct.load(expert_ids, index=(m_tile_idx,), shape=(1,))
+    expert_idx = expert_idx.item()
+
+    if gather_a or scatter_c or mul_topk_weights:
+        tile_token_ids_indices = m_tile_idx * TILE_M + ct.arange(TILE_M, dtype=ct.int32)
+        tile_token_ids = ct.gather(sorted_token_ids, tile_token_ids_indices, padding_value=0)
+
+    # If gather_a is True, we are doing the 1st group GEMM, need to load the tokens from the
+    # original un-replicated A matrix, divide by topk to map back. Otherwise, we are doing the
+    # 2nd group GEMM, the intermediate result is already in padded A matrix, use ct.load
+    if gather_a:
+        a_row_indices = tile_token_ids // topk
+
+    acc = ct.zeros((TILE_M, TILE_N), dtype=ct.float32)
+
+    if m_tile_idx * TILE_M < num_tokens_post_padded_:
+        for k_tile_idx in range(num_K_tiles):
+            if gather_a:
+                a_col_indices = k_tile_idx * TILE_K + ct.arange(TILE_K, dtype=ct.int32)
+                a = ct.gather(A, (a_row_indices[:, None], a_col_indices[None, :]), padding_value=0)
+            else:
+                a = ct.load(A, index=(m_tile_idx, k_tile_idx), shape=(TILE_M, TILE_K))
+            b = ct.load(
+                B,
+                index=(expert_idx, k_tile_idx, n_tile_idx),
+                shape=(1, TILE_K, TILE_N),
+                order=(0, 2, 1),
+            )
+            b = ct.reshape(b, (TILE_K, TILE_N))
+            acc = ct.mma(a, b, acc)
+
+        # For padded tokens, their token ids >= M * topk, use padding value 0 for them to mask out
+        if mul_topk_weights:
+            tile_topk_weight = ct.gather(topk_weights, tile_token_ids, padding_value=0)
+            tile_topk_weight = ct.expand_dims(tile_topk_weight, axis=1)
+            acc = acc * tile_topk_weight
+
+    acc = ct.astype(acc, C.dtype)
+
+    # If scatter_c is True, we are doing the 2nd group GEMM, need to scatter the result to the unpadded
+    # C matrix. Otherwise, we are doing the 1st group GEMM, keep the intermediate result in padded format.
+    if scatter_c:
+        c_row_indices = tile_token_ids
+        c_col_indices = n_tile_idx * TILE_N + ct.arange(TILE_N, dtype=ct.int32)
+        ct.scatter(C, (c_row_indices[:, None], c_col_indices[None, :]), acc)
+    else:
+        ct.store(C, index=(m_tile_idx, n_tile_idx), tile=acc)
+
+@register_impl("invoke_fused_moe_kernel_v2", "cutile")
+def invoke_fused_moe_kernel_v2(
+    A: torch.Tensor,    # Shape (M or padded_M, K)
+    B: torch.Tensor,    # Shape (E, N, K)
+    C: torch.Tensor,    # Shape (M or padded_M, N)
+    topk_weights: torch.Tensor,         # Shape (M*topk, )
+    sorted_token_ids: torch.Tensor,     # Shape (padded_M, ), values range from 0 to M*topk (padded tokens have value M*topk)
+    expert_ids: torch.Tensor,           # Shape (padded_M//TILE_M, )
+    num_tokens_post_padded,             # Shape (1, )
+    mul_topk_weights: bool,
+    topk: int,
+    gather_a: bool,
+    scatter_c: bool,
+    config: Dict[str, Any],
+) -> None:
+    assert A.shape[1] == B.shape[2]
+    assert B.shape[1] == C.shape[1]
+
+    TILE_M = config["TILE_SIZE_M"]
+    TILE_N = config["TILE_SIZE_N"]
+    TILE_K = config["TILE_SIZE_K"]
+    GROUP_SIZE_M = config["GROUP_SIZE_M"]
+    num_M_tiles = expert_ids.shape[0]
+    num_N_tiles = (C.shape[1] + TILE_N - 1) // TILE_N
+    num_K_tiles = (A.shape[1] + TILE_K - 1) // TILE_K
+    grid = (num_M_tiles * num_N_tiles, )
+
+    topk_weights = topk_weights.view(-1)
+    sorted_token_ids = sorted_token_ids.view(-1)
+
+    ct.launch(
+        torch.cuda.current_stream(),
+        grid,
+        fused_moe_kernel_v2,
+        (
+            A,
+            B,
+            C,
+            topk_weights,
+            sorted_token_ids,
+            expert_ids,
+            num_tokens_post_padded,
+            TILE_M,
+            TILE_N,
+            TILE_K,
+            GROUP_SIZE_M,
+            num_M_tiles,
+            num_N_tiles,
+            num_K_tiles,
+            topk,
+            gather_a,
+            scatter_c,
+            mul_topk_weights,
+        ),
+    )
+
